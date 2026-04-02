@@ -1,0 +1,80 @@
+name: Build, Push & Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          latest=$(git tag --sort=-v:refname | head -n 1)
+          if [ -z "$latest" ]; then
+            echo "version=0.0.2" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${latest#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump patch version
+        id: bump
+        run: |
+          IFS='.' read -r major minor patch <<< "${{ steps.get_tag.outputs.version }}"
+          new_version="${major}.${minor}.$((patch + 1))"
+          echo "version=${new_version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${new_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set image name
+        id: image
+        run: |
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "name=ghcr.io/${owner}/agent007" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ steps.bump.outputs.version }}
+            ${{ steps.image.outputs.name }}:latest
+
+      - name: Create Git tag
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag ${{ steps.bump.outputs.tag }}
+          git push origin ${{ steps.bump.outputs.tag }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.bump.outputs.tag }}
+          name: Release ${{ steps.bump.outputs.tag }}
+          body: |
+            ## agent007 ${{ steps.bump.outputs.tag }}
+
+            Docker image: `${{ steps.image.outputs.name }}:${{ steps.bump.outputs.version }}`
+
+            ```bash
+            docker pull ${{ steps.image.outputs.name }}:${{ steps.bump.outputs.version }}
+            ```
+          generate_release_notes: true
