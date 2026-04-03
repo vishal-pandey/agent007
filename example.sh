@@ -1,3 +1,4 @@
+#!/bin/bash
 curl -X POST http://localhost:8001/ \
   -H "Content-Type: application/json" \
   -d '{
@@ -8,8 +9,12 @@ curl -X POST http://localhost:8001/ \
       "id": "task-001",
       "metadata": {
         "model": "gemini-2.5-flash",
-        "instruction": "You only answer questions in 1 line only without fail",
-        "description": "A one-line answer bot"
+        "instruction": "You are an Azure cloud infrastructure expert. Use your loaded skills to provide accurate, actionable guidance.",
+        "description": "Azure infrastructure assistant with skills",
+        "skills": [
+          "microsoft/GitHub-Copilot-for-Azure/azure-ai",
+          "microsoft/GitHub-Copilot-for-Azure/azure-deploy"
+        ]
       },
       "message": {
         "role": "user",
@@ -17,7 +22,7 @@ curl -X POST http://localhost:8001/ \
         "parts": [
           {
             "kind": "text",
-            "text": "How do I read a CSV file?"
+            "text": "How do I set up Azure AI Search with vector search?"
           }
         ]
       }
