@@ -24,6 +24,13 @@ from google.adk.auth.credential_service.in_memory_credential_service import (
 )
 from google.adk.skills import models as skill_models
 from google.adk.tools.skill_toolset import SkillToolset
+from google.adk.tools.mcp_tool.mcp_toolset import (
+    McpToolset,
+    StdioConnectionParams,
+    SseConnectionParams,
+    StreamableHTTPConnectionParams,
+)
+from mcp import StdioServerParameters
 from a2a.server.request_handlers.default_request_handler import (
     DefaultRequestHandler,
 )
@@ -119,15 +126,62 @@ def _fetch_skills(skill_refs: list[str]) -> list[skill_models.Skill]:
     return skills
 
 
+def _build_mcp_toolsets(mcp_configs: list[dict]) -> list[McpToolset]:
+    """Build McpToolset instances from config dicts.
+
+    Each config dict can be:
+      - {"url": "https://..."} for Streamable HTTP servers
+      - {"url": "https://...", "transport": "sse"} for SSE servers
+      - {"command": "npx", "args": ["-y", "some-mcp-server"]} for stdio servers
+      - Optional "headers": {"key": "value"} for auth headers
+      - Optional "tool_filter": ["tool1", "tool2"] to limit tools
+    """
+    toolsets = []
+    for cfg in mcp_configs:
+        tool_filter = cfg.get("tool_filter")
+
+        if "url" in cfg:
+            transport = cfg.get("transport", "http")
+            headers = cfg.get("headers", {})
+            if transport == "sse":
+                params = SseConnectionParams(url=cfg["url"], headers=headers)
+            else:
+                params = StreamableHTTPConnectionParams(
+                    url=cfg["url"], headers=headers
+                )
+            toolsets.append(
+                McpToolset(connection_params=params, tool_filter=tool_filter)
+            )
+        elif "command" in cfg:
+            server_params = StdioServerParameters(
+                command=cfg["command"],
+                args=cfg.get("args", []),
+                env=cfg.get("env"),
+            )
+            params = StdioConnectionParams(
+                server_params=server_params,
+                timeout=30,
+            )
+            toolsets.append(
+                McpToolset(connection_params=params, tool_filter=tool_filter)
+            )
+        else:
+            print(f"Warning: Invalid MCP config, needs 'url' or 'command': {cfg}")
+    return toolsets
+
+
 def create_agent(
     model: str = DEFAULT_MODEL,
     description: str = DEFAULT_DESCRIPTION,
     instruction: str = DEFAULT_INSTRUCTION,
     skills: list[skill_models.Skill] | None = None,
+    mcp_toolsets: list[McpToolset] | None = None,
 ) -> Agent:
-    tools = []
+    tools: list = []
     if skills:
         tools.append(SkillToolset(skills=skills))
+    if mcp_toolsets:
+        tools.extend(mcp_toolsets)
 
     return Agent(
         model=model,
@@ -167,14 +221,17 @@ class DynamicRunnerExecutor(A2aAgentExecutor):
         instruction = meta.get("instruction", DEFAULT_INSTRUCTION)
         description = meta.get("description", DEFAULT_DESCRIPTION)
         skill_refs = meta.get("skills", [])
+        mcp_configs = meta.get("mcp_servers", [])
 
         skills = _fetch_skills(skill_refs) if skill_refs else None
+        mcp_toolsets = _build_mcp_toolsets(mcp_configs) if mcp_configs else None
 
         agent = create_agent(
             model=model,
             description=description,
             instruction=instruction,
             skills=skills,
+            mcp_toolsets=mcp_toolsets,
         )
         return _make_runner(agent)
 
