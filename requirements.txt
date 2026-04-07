@@ -3,3 +3,4 @@ python-dotenv==1.2.2
 uvicorn==0.40.0
 httpx>=0.27.0
 pyyaml>=6.0
+bedrock-agentcore

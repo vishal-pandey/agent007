@@ -255,9 +255,14 @@ def build_a2a_app(port: int = 8001) -> Starlette:
         push_config_store=push_config_store,
     )
 
+    # When deployed on AgentCore, AGENTCORE_RUNTIME_URL is injected automatically.
+    # Fall back to localhost for local development.
+    import os as _os
+    agent_url = _os.environ.get("AGENTCORE_RUNTIME_URL", f"http://localhost:{port}")
+
     agent_card = AgentCard(
         name="agent007",
-        url=f"http://localhost:{port}",
+        url=agent_url,
         description=DEFAULT_DESCRIPTION,
         version="1.0.0",
         capabilities={},
@@ -275,7 +280,9 @@ def build_a2a_app(port: int = 8001) -> Starlette:
     return a2a_starlette.build()
 
 
-a2a_app = build_a2a_app(port=8001)
+import os
+_port = int(os.environ.get("A2A_PORT", "8001"))
+a2a_app = build_a2a_app(port=_port)
 
 # Keep root_agent for ADK CLI compatibility
 root_agent = create_agent()
