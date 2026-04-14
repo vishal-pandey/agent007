@@ -32,9 +32,9 @@ curl -X POST http://localhost:8001/ \
   }'
 
 
-# Example: Bedrock model (use bedrock/ prefix)
-# Auth uses boto3 credential chain (env vars, IAM role, etc.)
-curl -X POST http://localhost:8001/ \
+
+# Example to use mcp server dynamically
+curl -X POST https://agent007.codeshare.co.in/ \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
