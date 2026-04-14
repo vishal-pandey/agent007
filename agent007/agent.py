@@ -52,6 +52,10 @@ class SafeMcpToolset(BaseToolset):
     """
 
     def __init__(self, inner: McpToolset):
+        super().__init__(
+            tool_filter=inner.tool_filter,
+            tool_name_prefix=inner.tool_name_prefix,
+        )
         self._inner = inner
 
     async def get_tools(self, readonly_context=None):
@@ -64,6 +68,14 @@ class SafeMcpToolset(BaseToolset):
     async def close(self):
         try:
             await self._inner.close()
+        except Exception:
+            pass
+
+    async def process_llm_request(self, *, tool_context, llm_request):
+        try:
+            return await self._inner.process_llm_request(
+                tool_context=tool_context, llm_request=llm_request
+            )
         except Exception:
             pass
 
