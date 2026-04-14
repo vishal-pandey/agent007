@@ -43,7 +43,9 @@ from a2a.types import AgentCard
 from starlette.applications import Starlette
 
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+from google.adk.models.lite_llm import LiteLlm
+
+DEFAULT_MODEL = "gemini/gemini-2.5-flash"
 DEFAULT_DESCRIPTION = "A helpful assistant for user questions."
 DEFAULT_INSTRUCTION = "Answer user questions to the best of your knowledge"
 
@@ -170,6 +172,24 @@ def _build_mcp_toolsets(mcp_configs: list[dict]) -> list[McpToolset]:
     return toolsets
 
 
+def _resolve_model(model: str):
+    """Resolve a model string to the appropriate ADK model object.
+
+    Supported prefixes:
+      - "bedrock/<model-id>"  → LiteLlm(model="bedrock/<model-id>")
+      - "gemini/<model-id>"   → raw model-id string (native Gemini)
+      - bare string           → passed through as-is for backward compat
+    """
+    if model.startswith("bedrock/"):
+        # LiteLlm handles Bedrock via boto3 credential chain
+        return LiteLlm(model=model)
+    if model.startswith("gemini/"):
+        # Strip prefix — ADK handles Gemini model IDs natively
+        return model.removeprefix("gemini/")
+    # Fallback: pass through as-is (e.g. "gemini-2.5-flash" still works)
+    return model
+
+
 def create_agent(
     model: str = DEFAULT_MODEL,
     description: str = DEFAULT_DESCRIPTION,
@@ -183,8 +203,10 @@ def create_agent(
     if mcp_toolsets:
         tools.extend(mcp_toolsets)
 
+    resolved_model = _resolve_model(model)
+
     return Agent(
-        model=model,
+        model=resolved_model,
         name="root_agent",
         description=description,
         instruction=instruction,
@@ -255,9 +277,14 @@ def build_a2a_app(port: int = 8001) -> Starlette:
         push_config_store=push_config_store,
     )
 
+    # When deployed on AgentCore, AGENTCORE_RUNTIME_URL is injected automatically.
+    # Fall back to localhost for local development.
+    import os as _os
+    agent_url = _os.environ.get("AGENTCORE_RUNTIME_URL", f"http://localhost:{port}")
+
     agent_card = AgentCard(
         name="agent007",
-        url=f"http://localhost:{port}",
+        url=agent_url,
         description=DEFAULT_DESCRIPTION,
         version="1.0.0",
         capabilities={},
@@ -275,7 +302,9 @@ def build_a2a_app(port: int = 8001) -> Starlette:
     return a2a_starlette.build()
 
 
-a2a_app = build_a2a_app(port=8001)
+import os
+_port = int(os.environ.get("A2A_PORT", "8001"))
+a2a_app = build_a2a_app(port=_port)
 
 # Keep root_agent for ADK CLI compatibility
 root_agent = create_agent()

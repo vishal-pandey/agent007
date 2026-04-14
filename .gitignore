@@ -25,6 +25,9 @@ agent007/.env
 .adk/
 agent007/.adk/
 
+# Bedrock AgentCore build artifacts
+.bedrock_agentcore/
+
 # OS
 .DS_Store
 Thumbs.db
