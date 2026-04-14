@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Example: Gemini model (use gemini/ prefix or bare model name)
-curl -X POST http://localhost:8001/ \
+curl -X POST https://agent007.codeshare.co.in/ \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
