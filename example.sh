@@ -43,9 +43,12 @@ curl -X POST https://agent007.codeshare.co.in/ \
     "params": {
       "id": "task-002",
       "metadata": {
-        "model": "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
+        "model": "gemini/gemini-2.5-flash",
         "instruction": "You are a helpful assistant.",
-        "description": "Bedrock Claude assistant"
+        "description": "Bedrock Claude assistant",
+        "mcp_servers": [
+          {"command": "npx", "args": ["-y", "@upstash/context7-mcp"]}
+        ]
       },
       "message": {
         "role": "user",

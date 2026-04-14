@@ -41,6 +41,31 @@ from a2a.server.tasks.inmemory_push_notification_config_store import (
 from a2a.server.apps.jsonrpc.starlette_app import A2AStarletteApplication
 from a2a.types import AgentCard
 from starlette.applications import Starlette
+from google.adk.tools.base_toolset import BaseToolset
+
+
+class SafeMcpToolset(BaseToolset):
+    """Wrapper around McpToolset that catches connection errors gracefully.
+
+    If the underlying MCP server is unreachable (e.g. localhost from a container),
+    this returns an empty tool list instead of crashing the entire request.
+    """
+
+    def __init__(self, inner: McpToolset):
+        self._inner = inner
+
+    async def get_tools(self, readonly_context=None):
+        try:
+            return await self._inner.get_tools(readonly_context)
+        except (ConnectionError, TimeoutError, OSError, Exception) as e:
+            print(f"Warning: MCP server unreachable, skipping tools: {e}")
+            return []
+
+    async def close(self):
+        try:
+            await self._inner.close()
+        except Exception:
+            pass
 
 
 from google.adk.models.lite_llm import LiteLlm
@@ -128,7 +153,7 @@ def _fetch_skills(skill_refs: list[str]) -> list[skill_models.Skill]:
     return skills
 
 
-def _build_mcp_toolsets(mcp_configs: list[dict]) -> list[McpToolset]:
+def _build_mcp_toolsets(mcp_configs: list[dict]) -> list[SafeMcpToolset]:
     """Build McpToolset instances from config dicts.
 
     Each config dict can be:
@@ -145,14 +170,15 @@ def _build_mcp_toolsets(mcp_configs: list[dict]) -> list[McpToolset]:
         if "url" in cfg:
             transport = cfg.get("transport", "http")
             headers = cfg.get("headers", {})
+            timeout = cfg.get("timeout", 60)
             if transport == "sse":
-                params = SseConnectionParams(url=cfg["url"], headers=headers)
+                params = SseConnectionParams(url=cfg["url"], headers=headers, timeout=timeout)
             else:
                 params = StreamableHTTPConnectionParams(
-                    url=cfg["url"], headers=headers
+                    url=cfg["url"], headers=headers, timeout=timeout
                 )
             toolsets.append(
-                McpToolset(connection_params=params, tool_filter=tool_filter)
+                SafeMcpToolset(McpToolset(connection_params=params, tool_filter=tool_filter))
             )
         elif "command" in cfg:
             server_params = StdioServerParameters(
@@ -165,7 +191,7 @@ def _build_mcp_toolsets(mcp_configs: list[dict]) -> list[McpToolset]:
                 timeout=30,
             )
             toolsets.append(
-                McpToolset(connection_params=params, tool_filter=tool_filter)
+                SafeMcpToolset(McpToolset(connection_params=params, tool_filter=tool_filter))
             )
         else:
             print(f"Warning: Invalid MCP config, needs 'url' or 'command': {cfg}")
@@ -195,7 +221,7 @@ def create_agent(
     description: str = DEFAULT_DESCRIPTION,
     instruction: str = DEFAULT_INSTRUCTION,
     skills: list[skill_models.Skill] | None = None,
-    mcp_toolsets: list[McpToolset] | None = None,
+    mcp_toolsets: list[SafeMcpToolset] | None = None,
 ) -> Agent:
     tools: list = []
     if skills:
@@ -246,7 +272,13 @@ class DynamicRunnerExecutor(A2aAgentExecutor):
         mcp_configs = meta.get("mcp_servers", [])
 
         skills = _fetch_skills(skill_refs) if skill_refs else None
-        mcp_toolsets = _build_mcp_toolsets(mcp_configs) if mcp_configs else None
+
+        mcp_toolsets = None
+        if mcp_configs:
+            try:
+                mcp_toolsets = _build_mcp_toolsets(mcp_configs)
+            except Exception as e:
+                print(f"Warning: Failed to build MCP toolsets, continuing without them: {e}")
 
         agent = create_agent(
             model=model,
