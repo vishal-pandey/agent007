@@ -12,7 +12,7 @@ from bedrock_agentcore import BedrockAgentCoreApp
 from google.adk.runners import RunConfig
 from google.genai import types as genai_types
 
-from agent007.agent import create_agent, _make_runner
+from agent007.agent import create_agent, _make_runner, DEFAULT_MODEL
 
 app = BedrockAgentCoreApp()
 
@@ -20,8 +20,9 @@ app = BedrockAgentCoreApp()
 @app.entrypoint
 async def invoke(payload, context):
     prompt = payload.get("prompt", "Hello!")
+    model = payload.get("model", DEFAULT_MODEL)
 
-    agent = create_agent()
+    agent = create_agent(model=model)
     runner = _make_runner(agent)
 
     # create_session may be sync or async depending on the ADK version;

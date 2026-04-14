@@ -43,7 +43,9 @@ from a2a.types import AgentCard
 from starlette.applications import Starlette
 
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+from google.adk.models.lite_llm import LiteLlm
+
+DEFAULT_MODEL = "gemini/gemini-2.5-flash"
 DEFAULT_DESCRIPTION = "A helpful assistant for user questions."
 DEFAULT_INSTRUCTION = "Answer user questions to the best of your knowledge"
 
@@ -170,6 +172,24 @@ def _build_mcp_toolsets(mcp_configs: list[dict]) -> list[McpToolset]:
     return toolsets
 
 
+def _resolve_model(model: str):
+    """Resolve a model string to the appropriate ADK model object.
+
+    Supported prefixes:
+      - "bedrock/<model-id>"  → LiteLlm(model="bedrock/<model-id>")
+      - "gemini/<model-id>"   → raw model-id string (native Gemini)
+      - bare string           → passed through as-is for backward compat
+    """
+    if model.startswith("bedrock/"):
+        # LiteLlm handles Bedrock via boto3 credential chain
+        return LiteLlm(model=model)
+    if model.startswith("gemini/"):
+        # Strip prefix — ADK handles Gemini model IDs natively
+        return model.removeprefix("gemini/")
+    # Fallback: pass through as-is (e.g. "gemini-2.5-flash" still works)
+    return model
+
+
 def create_agent(
     model: str = DEFAULT_MODEL,
     description: str = DEFAULT_DESCRIPTION,
@@ -183,8 +203,10 @@ def create_agent(
     if mcp_toolsets:
         tools.extend(mcp_toolsets)
 
+    resolved_model = _resolve_model(model)
+
     return Agent(
-        model=model,
+        model=resolved_model,
         name="root_agent",
         description=description,
         instruction=instruction,
