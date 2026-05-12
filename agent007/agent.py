@@ -185,19 +185,37 @@ class _SigV4HttpxAuth(httpx.Auth):
     SigV4 signing — static headers can't carry it because the signature depends
     on the request body. This auth class re-signs every request using the
     current process credential chain.
+
+    Two AgentCore-specific behaviors:
+      1. Inject `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` (required by the
+         data plane; must be ≥33 chars and stable per logical session).
+      2. Only sign a small, deterministic header set — httpx adds headers like
+         `Accept-Encoding`, `Content-Length`, `Connection` after `auth_flow`
+         runs, and including them in the signature causes SigV4 mismatch.
     """
 
     requires_request_body = True
 
-    def __init__(self, service: str, region: str) -> None:
+    _SIGNED_HEADERS = (
+        "content-type",
+        "accept",
+        "mcp-session-id",
+        "mcp-protocol-version",
+        "x-amzn-bedrock-agentcore-runtime-session-id",
+    )
+
+    def __init__(self, service: str, region: str, runtime_session_id: str | None = None) -> None:
         # Imports are local so users without boto3 can still load this module.
         import boto3
+        import uuid as _uuid
         from botocore.auth import SigV4Auth
 
         self._session = boto3.Session()
         self._signer_factory = SigV4Auth
         self._service = service
         self._region = region
+        # 33+ char identifier as required by AgentCore data plane.
+        self._runtime_session_id = runtime_session_id or f"agent007-mcp-{_uuid.uuid4()}"
 
     def _credentials(self):
         creds = self._session.get_credentials()
@@ -210,16 +228,20 @@ class _SigV4HttpxAuth(httpx.Auth):
     def auth_flow(self, request: httpx.Request):
         from botocore.awsrequest import AWSRequest
 
-        # botocore needs the raw body bytes to compute the payload hash.
+        request.headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] = self._runtime_session_id
+
         body = request.content or b""
+        signing_headers = {
+            k: v
+            for k, v in request.headers.items()
+            if k.lower() in self._SIGNED_HEADERS
+        }
         aws_request = AWSRequest(
             method=request.method,
             url=str(request.url),
             data=body,
-            headers={k: v for k, v in request.headers.items() if k.lower() != "host"},
+            headers=signing_headers,
         )
-        # Force-overwrite any pre-set Authorization header from the caller.
-        aws_request.headers.pop("Authorization", None)
         self._signer_factory(
             self._credentials(), self._service, self._region
         ).add_auth(aws_request)
@@ -232,6 +254,10 @@ def _agentcore_httpx_client_factory(region: str):
     """Return an `httpx_client_factory` that injects SigV4 auth for AgentCore."""
     from mcp.shared._httpx_utils import create_mcp_http_client
 
+    # One session id per client — the same auth instance is reused across the
+    # MCP session's POSTs and SSE polls, keeping the runtime session sticky.
+    sigv4_auth = _SigV4HttpxAuth("bedrock-agentcore", region)
+
     def factory(
         headers: dict[str, str] | None = None,
         timeout: httpx.Timeout | None = None,
@@ -241,7 +267,7 @@ def _agentcore_httpx_client_factory(region: str):
         return create_mcp_http_client(
             headers=headers,
             timeout=timeout,
-            auth=auth or _SigV4HttpxAuth("bedrock-agentcore", region),
+            auth=auth or sigv4_auth,
         )
 
     return factory
