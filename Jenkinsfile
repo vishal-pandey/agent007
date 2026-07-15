@@ -23,6 +23,7 @@ pipeline {
   }
 
   parameters {
+    string(name: 'BRANCH',             defaultValue: 'main',                                        description: 'Git branch to build & deploy (manual runs). Polling always uses main.')
     string(name: 'AWS_REGION',         defaultValue: 'us-east-1',                                   description: 'Region of ECR / CodeBuild / AgentCore')
     string(name: 'AWS_ACCOUNT_ID',     defaultValue: '813923511679',                                description: 'AWS account id')
     string(name: 'ECR_REPO',           defaultValue: 'bedrock-agentcore-agent007',                  description: 'ECR repository name')
