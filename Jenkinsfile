@@ -80,11 +80,11 @@ pipeline {
     stage('Approve prod deploy') {
       options { timeout(time: 60, unit: 'MINUTES') }
       input {
-        message "Image ${IMAGE_TAG} is built. Deploy it to the LIVE 'agent007' runtime?"
+        message "Image ${env.IMAGE_TAG} is built. Deploy it to the LIVE 'agent007' runtime?"
         ok "Deploy to prod"
       }
       steps {
-        echo "Approved — deploying ${IMAGE_TAG} to the live runtime."
+        echo "Approved — deploying ${env.IMAGE_TAG} to the live runtime."
       }
     }
 
