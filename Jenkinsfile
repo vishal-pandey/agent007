@@ -50,8 +50,16 @@ pipeline {
       steps {
         checkout scm
         script {
+          // The pipeline definition is always loaded from main; for manual runs
+          // we build whatever BRANCH was requested. Polling leaves BRANCH=main.
+          def br = (params.BRANCH ?: 'main').trim()
+          if (!(br ==~ /[A-Za-z0-9._\/-]+/)) { error "Invalid BRANCH: '${br}'" }
+          if (br != 'main') {
+            echo "Manual run — switching to branch '${br}'"
+            sh "git fetch --no-tags origin ${br} && git checkout -f FETCH_HEAD"
+          }
           env.IMAGE_TAG = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-          echo "Deploying commit ${env.IMAGE_TAG}"
+          echo "Building branch '${br}' at commit ${env.IMAGE_TAG}"
         }
       }
     }
