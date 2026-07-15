@@ -34,3 +34,9 @@ Thumbs.db
 
 # Docker
 .dockerignore
+
+# Jenkins setup infra (kept local; not needed by the pipeline)
+deploy/jenkins/
+# pipeline runtime outputs
+build_output.env
+deploy_output.env

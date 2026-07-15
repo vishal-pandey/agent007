@@ -1,0 +1,32 @@
+version: 0.2
+
+# Runs in AWS CodeBuild on an ARM_CONTAINER (aarch64) with privilegedMode=true,
+# so `docker build` produces a native linux/arm64 image — exactly what Bedrock
+# AgentCore requires — with no QEMU emulation.
+#
+# Expected environment variables (passed as overrides by deploy/codebuild_build.sh):
+#   AWS_ACCOUNT_ID, ECR_REPO, IMAGE_TAG
+#   AWS_REGION is provided automatically by CodeBuild.
+
+env:
+  variables:
+    DOCKER_BUILDKIT: "1"
+
+phases:
+  pre_build:
+    commands:
+      - export ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+      - export IMAGE_URI="${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
+      - export IMAGE_URI_LATEST="${ECR_REGISTRY}/${ECR_REPO}:latest"
+      - echo "Logging in to ECR ${ECR_REGISTRY}"
+      - aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+  build:
+    commands:
+      - echo "Building native arm64 image ${IMAGE_URI}"
+      - docker build --platform linux/arm64 -t "${IMAGE_URI}" -t "${IMAGE_URI_LATEST}" .
+  post_build:
+    commands:
+      - echo "Pushing ${IMAGE_URI}"
+      - docker push "${IMAGE_URI}"
+      - docker push "${IMAGE_URI_LATEST}"
+      - echo "Pushed ${IMAGE_URI}"
