@@ -1,6 +1,7 @@
 import contextvars
 import re
-from typing import Optional
+from typing import Any, Optional
+from urllib.parse import urlparse
 
 import httpx
 import yaml
@@ -165,6 +166,113 @@ def _fetch_skills(skill_refs: list[str]) -> list[skill_models.Skill]:
     return skills
 
 
+_AGENTCORE_HOST_RE = re.compile(
+    r"^bedrock-agentcore(?:\.[a-z0-9-]+)?\.([a-z0-9-]+)\.amazonaws\.com$"
+)
+
+
+def _agentcore_region(url: str) -> Optional[str]:
+    """Return the AWS region if `url` points at the Bedrock AgentCore data plane."""
+    host = (urlparse(url).hostname or "").lower()
+    match = _AGENTCORE_HOST_RE.match(host)
+    return match.group(1) if match else None
+
+
+class _SigV4HttpxAuth(httpx.Auth):
+    """Sign each outgoing httpx request with SigV4 for the given service+region.
+
+    AgentCore-hosted MCP servers default to IAM auth, which requires per-request
+    SigV4 signing — static headers can't carry it because the signature depends
+    on the request body. This auth class re-signs every request using the
+    current process credential chain.
+
+    Two AgentCore-specific behaviors:
+      1. Inject `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` (required by the
+         data plane; must be ≥33 chars and stable per logical session).
+      2. Only sign a small, deterministic header set — httpx adds headers like
+         `Accept-Encoding`, `Content-Length`, `Connection` after `auth_flow`
+         runs, and including them in the signature causes SigV4 mismatch.
+    """
+
+    requires_request_body = True
+
+    _SIGNED_HEADERS = (
+        "content-type",
+        "accept",
+        "mcp-session-id",
+        "mcp-protocol-version",
+        "x-amzn-bedrock-agentcore-runtime-session-id",
+    )
+
+    def __init__(self, service: str, region: str, runtime_session_id: str | None = None) -> None:
+        # Imports are local so users without boto3 can still load this module.
+        import boto3
+        import uuid as _uuid
+        from botocore.auth import SigV4Auth
+
+        self._session = boto3.Session()
+        self._signer_factory = SigV4Auth
+        self._service = service
+        self._region = region
+        # 33+ char identifier as required by AgentCore data plane.
+        self._runtime_session_id = runtime_session_id or f"agent007-mcp-{_uuid.uuid4()}"
+
+    def _credentials(self):
+        creds = self._session.get_credentials()
+        if creds is None:
+            raise RuntimeError(
+                "No AWS credentials available for SigV4 signing of AgentCore MCP request."
+            )
+        return creds.get_frozen_credentials()
+
+    def auth_flow(self, request: httpx.Request):
+        from botocore.awsrequest import AWSRequest
+
+        request.headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] = self._runtime_session_id
+
+        body = request.content or b""
+        signing_headers = {
+            k: v
+            for k, v in request.headers.items()
+            if k.lower() in self._SIGNED_HEADERS
+        }
+        aws_request = AWSRequest(
+            method=request.method,
+            url=str(request.url),
+            data=body,
+            headers=signing_headers,
+        )
+        self._signer_factory(
+            self._credentials(), self._service, self._region
+        ).add_auth(aws_request)
+        for header_name, header_value in aws_request.headers.items():
+            request.headers[header_name] = header_value
+        yield request
+
+
+def _agentcore_httpx_client_factory(region: str):
+    """Return an `httpx_client_factory` that injects SigV4 auth for AgentCore."""
+    from mcp.shared._httpx_utils import create_mcp_http_client
+
+    # One session id per client — the same auth instance is reused across the
+    # MCP session's POSTs and SSE polls, keeping the runtime session sticky.
+    sigv4_auth = _SigV4HttpxAuth("bedrock-agentcore", region)
+
+    def factory(
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+        auth: httpx.Auth | None = None,
+    ) -> httpx.AsyncClient:
+        # If the caller already supplied an auth (e.g. bearer token), respect it.
+        return create_mcp_http_client(
+            headers=headers,
+            timeout=timeout,
+            auth=auth or sigv4_auth,
+        )
+
+    return factory
+
+
 def _build_mcp_toolsets(mcp_configs: list[dict]) -> list[SafeMcpToolset]:
     """Build McpToolset instances from config dicts.
 
@@ -174,6 +282,10 @@ def _build_mcp_toolsets(mcp_configs: list[dict]) -> list[SafeMcpToolset]:
       - {"command": "npx", "args": ["-y", "some-mcp-server"]} for stdio servers
       - Optional "headers": {"key": "value"} for auth headers
       - Optional "tool_filter": ["tool1", "tool2"] to limit tools
+
+    When the URL host matches the Bedrock AgentCore data plane, requests are
+    SigV4-signed using the local AWS credential chain — no extra config needed
+    beyond IAM permission on the agent's execution role.
     """
     toolsets = []
     for cfg in mcp_configs:
@@ -183,11 +295,17 @@ def _build_mcp_toolsets(mcp_configs: list[dict]) -> list[SafeMcpToolset]:
             transport = cfg.get("transport", "http")
             headers = cfg.get("headers", {})
             timeout = cfg.get("timeout", 60)
+            agentcore_region = _agentcore_region(cfg["url"])
+            extra_kwargs: dict[str, Any] = {}
+            if agentcore_region and transport != "sse":
+                extra_kwargs["httpx_client_factory"] = _agentcore_httpx_client_factory(
+                    agentcore_region
+                )
             if transport == "sse":
                 params = SseConnectionParams(url=cfg["url"], headers=headers, timeout=timeout)
             else:
                 params = StreamableHTTPConnectionParams(
-                    url=cfg["url"], headers=headers, timeout=timeout
+                    url=cfg["url"], headers=headers, timeout=timeout, **extra_kwargs
                 )
             toolsets.append(
                 SafeMcpToolset(McpToolset(connection_params=params, tool_filter=tool_filter))
